@@ -1,0 +1,189 @@
+---
+title: "Machine Learning Project - Recreating the Qualitative Activity Recognition Analysis"
+author: "Danny Scott"
+date: "October 10, 2015"
+output: html_document
+
+keep_md: true
+---
+
+##Recreation of the Qualitative Activity Recognition Weight Lifting Excersie [1] analysis. 
+
+## Synopsis 
+This analysis is an attempt to recreate the "manner" in which the authors completed the WLE [1] data analysis. The WLE research was focused on recognizing qualitative aspect of exercise activities. The specific case of weight lifting exercises was chosen and one exercise, the unilateral dumbbell biceps curl, was evaluated. 
+
+The WLE study  approached the problem using random forest with "Bagging".  The study also noted 10 random forests, each with 10 trees. Later, in the study, they used leave-one-out to measure the out of sample classifiers' worthiness.
+
+
+###Feature extraction, and dimension reduction
+
+
+```{r echo=FALSE}
+setwd("C:/Users/b82944/Desktop/Data Science/_8 Practical Machine Learning")
+
+
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+
+
+
+
+```
+
+```{r message=FALSE}
+library(corrplot); library(lattice); library(ggplot2); library(caret); library(randomForest);
+
+```
+
+```{r}
+set.seed(8675309)
+
+#make data consistent whcih has { #DIV/0!, NA, and blanks } values.
+ds_training <- read.csv("pml-training.csv", na.strings = c("","NA","#DIV/0!"), stringsAsFactors = FALSE)
+
+#now, remove empty columns with no data
+ds_training <- ds_training[,colSums(is.na(ds_training))==0]
+
+#which variables are numeric and whcih are not (excluding the classe )?
+non_numeric <- !sapply(ds_training, is.numeric)
+which(non_numeric)
+
+#since there are non-numeric columns, some are not needed or need correcting
+#or likely not not related to HOW the exercise was conducted, also the time related 
+#dimensions are removed as I'll not use timeseries style analysis
+cols_to_remove <- c("X", "user_name", "raw_timestamp_part_1","raw_timestamp_part_2",
+                    "cvtd_timestamp", "new_window", "num_window");
+
+#drop columns with no data or non-numeric
+ds_training <- ds_training[, ! names(ds_training) %in% cols_to_remove, drop = F]
+dim(ds_training)
+
+```
+Variable Correlation
+
+```{r}
+#Feature selection: In the analysis, is was noted there were 17 features selected based on the feature
+#selection algorithm based on correlation proposed by Hall [2]
+correlationMatrix <- cor(ds_training[,1:52])
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.75)
+names(ds_training[1,highlyCorrelated])
+
+#make classe a factor
+ds_training$classe <- as.factor(ds_training$classe)
+
+#checking to see if we have about the same number of classe factors
+table(ds_training$classe)
+
+#splitting into 60/40  Training/ test
+inTrain <- createDataPartition(y=ds_training$classe, p=0.60, list=FALSE)
+training <- ds_training[inTrain,]
+testing <-  ds_training[-inTrain,]  
+table(training$classe)
+
+#checing the correlations between variables in the training set
+corr_mtrx <- abs(cor(training[, names(training) != 'classe']))
+diag(corr_mtrx) <- 0
+corrplot(corr_mtrx, order = "FPC", method = "color", type = "lower", tl.cex = 0.75, tl.col = rgb(0, 0, 0))
+#darkest blue are highly correlated variables
+#one example, roll_belt and accel_belt_z is hightly correlated (dark blue)
+
+
+#random forest model on training set with 10 fold cross validation
+modFit <- train(training$classe ~ ., method = "rf", preProcess=c("scale","center"), data = training,
+                trControl = trainControl(method = "cv", number = 10, allowParallel=TRUE), importance = TRUE)
+modFit
+
+#reveiw the confusion matrix
+modFit$finalModel
+
+
+#the important variables 
+imp <- varImp(modFit, scale=FALSE)
+plot(imp)
+#so, it looks like there are 6 variables (upper right corners) that should be reviewed
+
+
+#now that we have the rf model, we check the out of sample error by predicting using the "test"
+testClassPred <- predict(modFit, testing)
+
+cf <- confusionMatrix(testing$classe, predict(modFit, testing))
+cf$table
+
+prs <- postResample(testing$classe, testClassPred)
+prs
+accuracy <- prs[1]  #
+accuracy #99%
+
+oose <- 1 - accuracy
+oose     #0.07% Out of sample error
+
+#So, the rf model is very accurate and the out of sample error is very skmall.  
+#This is a good model. drawback - it takes so long to run!!
+
+```
+##Predict Results
+
+```{r}
+
+#Process the sample to predict the same as the test
+
+#now we process the real test sample that we want and make predictions
+ds_test  <- read.csv("pml-testing.csv", na.strings = c("","NA","#DIV/0!"), stringsAsFactors = FALSE)
+ds_test  <- ds_test[,colSums(is.na(ds_test))==0]
+ds_test <- ds_test[, ! names(ds_test) %in% cols_to_remove, drop = F]
+
+ds_test$classe <- as.character("NA")
+
+testPred <- predict(modFit, ds_test)
+testPred
+
+
+
+```
+
+
+```{r, echo=FALSE}
+pml_write_files(testPred)
+#featurePlot(x=ds_training[,-53], y=ds_training$classe, plot="pairs")
+
+
+
+
+```
+
+
+BIBLIOGRAPHY
+
+
+
+[1] Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
+
+[2] Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+
+[3] Feature Selection, http://machinelearningmastery.com/feature-selection-with-the-caret-r-package/, pulled 12 Oct, 2015
+
+[4] B. Bridle, editor. Strength Training: The Complete
+step-by-step guide to sculpting a stronger body. Dorling
+Kinderley Limited, 2011.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
